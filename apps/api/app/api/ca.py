@@ -1,3 +1,4 @@
+import json
 import re
 import subprocess
 import tempfile
@@ -7,8 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
+from app.core.db import get_db
 from app.core.config import settings
 from app.core.rbac import require_roles
+from app.models.job import Job, JobStatus
+from app.services.celery_client import celery_client
+from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/ca", tags=["ca"])
 
@@ -21,6 +26,11 @@ class CaInitPlanRequest(BaseModel):
     enable_acme: bool = True
     enable_remote_management: bool = True
     enable_ssh: bool = False
+
+
+class CaInitializeRequest(CaInitPlanRequest):
+    ca_password: str = Field(min_length=1, max_length=255)
+    provisioner_password: str = Field(min_length=1, max_length=255)
 
 
 def _step_http() -> httpx.Client:
@@ -185,3 +195,38 @@ def init_plan(
         ],
         "worker_env_example": "export STEP_CA_PASSWORD='<your-step-ca-password>'",
     }
+
+
+@router.post("/initialize")
+def initialize_ca(
+    payload: CaInitializeRequest,
+    claims: dict = Depends(require_roles("pki-admin")),
+    db: Session = Depends(get_db),
+):
+    requested_by = claims.get("preferred_username") or claims.get("sub", "unknown")
+    running = (
+        db.query(Job)
+        .filter(Job.task_name == "initialize_ca", Job.status.in_([JobStatus.pending, JobStatus.running]))
+        .order_by(Job.id.desc())
+        .first()
+    )
+    if running:
+        return {"job_id": running.id, "celery_id": running.celery_id, "note": "Initialization already in progress"}
+    task = celery_client.send_task(
+        "worker.tasks.ca_init.initialize_ca",
+        kwargs=payload.model_dump(),
+    )
+    safe_payload = payload.model_dump()
+    safe_payload["ca_password"] = "***"
+    safe_payload["provisioner_password"] = "***"
+    job = Job(
+        task_name="initialize_ca",
+        celery_id=task.id,
+        status=JobStatus.pending,
+        requested_by=requested_by,
+        input_json=json.dumps(safe_payload),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return {"job_id": job.id, "celery_id": task.id}

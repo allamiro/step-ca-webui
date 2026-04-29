@@ -21,6 +21,7 @@ export default function CaSetup() {
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [err, setErr] = useState("");
   const [plan, setPlan] = useState<{ command: string; next_steps: string[]; worker_env_example: string } | null>(null);
+  const [initJob, setInitJob] = useState<{ id: number; status: string; error?: string } | null>(null);
   const [form, setForm] = useState({
     name: "My PKI",
     dns_names: "step-ca,localhost",
@@ -29,6 +30,8 @@ export default function CaSetup() {
     enable_acme: true,
     enable_remote_management: true,
     enable_ssh: false,
+    ca_password: "",
+    provisioner_password: "",
   });
 
   useEffect(() => {
@@ -51,8 +54,27 @@ export default function CaSetup() {
   };
 
   const buildPlan = async () => {
-    const res = await api.post("/ca/init-plan", form);
+    const { ca_password: _ca, provisioner_password: _prov, ...planPayload } = form;
+    const res = await api.post("/ca/init-plan", planPayload);
     setPlan(res.data);
+  };
+
+  const autoInitialize = async () => {
+    if (!form.ca_password || !form.provisioner_password) {
+      setErr("Please provide both CA password and provisioner password.");
+      return;
+    }
+    const res = await api.post("/ca/initialize", form);
+    const jobId = res.data.job_id;
+    setErr("");
+    const interval = setInterval(async () => {
+      const jobRes = await api.get(`/jobs/${jobId}`);
+      setInitJob(jobRes.data);
+      if (jobRes.data.status === "succeeded" || jobRes.data.status === "failed") {
+        clearInterval(interval);
+      }
+    }, 2000);
+    setTimeout(() => clearInterval(interval), 180000);
   };
 
   return (
@@ -111,6 +133,20 @@ export default function CaSetup() {
             value={form.provisioner}
             onChange={(e) => setForm((p) => ({ ...p, provisioner: e.target.value }))}
           />
+          <input
+            className="rounded bg-slate-800 px-3 py-2"
+            type="password"
+            placeholder="CA key password"
+            value={form.ca_password}
+            onChange={(e) => setForm((p) => ({ ...p, ca_password: e.target.value }))}
+          />
+          <input
+            className="rounded bg-slate-800 px-3 py-2"
+            type="password"
+            placeholder="Provisioner password"
+            value={form.provisioner_password}
+            onChange={(e) => setForm((p) => ({ ...p, provisioner_password: e.target.value }))}
+          />
         </div>
         <div className="flex flex-wrap gap-4 text-sm text-slate-300">
           <label className="flex items-center gap-2">
@@ -130,9 +166,14 @@ export default function CaSetup() {
             SSH certificates
           </label>
         </div>
-        <button type="button" className="rounded bg-indigo-600 px-3 py-2 text-sm" onClick={buildPlan}>
+        <div className="flex gap-2">
+          <button type="button" className="rounded bg-indigo-600 px-3 py-2 text-sm" onClick={buildPlan}>
           Generate init command
-        </button>
+          </button>
+          <button type="button" className="rounded bg-emerald-600 px-3 py-2 text-sm" onClick={autoInitialize}>
+            Auto initialize now
+          </button>
+        </div>
         {plan && (
           <div className="rounded bg-slate-950 p-3 text-xs text-slate-300 space-y-2">
             <p className="text-slate-400">Run from `infra`:</p>
@@ -144,6 +185,13 @@ export default function CaSetup() {
                 <li key={idx}>{step}</li>
               ))}
             </ul>
+          </div>
+        )}
+        {initJob && (
+          <div className="rounded bg-slate-950 p-3 text-xs text-slate-300 space-y-1">
+            <p>Init job #{initJob.id}</p>
+            <p>Status: {initJob.status}</p>
+            {initJob.error && <p className="text-red-400">Error: {initJob.error}</p>}
           </div>
         )}
       </div>

@@ -68,6 +68,8 @@ def initialize_ca(
         "step",
         "ca",
         "init",
+        "--deployment-type",
+        "standalone",
         "--name",
         name,
         "--dns",

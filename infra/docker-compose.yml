@@ -42,6 +42,7 @@ services:
       DATABASE_URL: postgresql+psycopg2://pki:pki@postgres:5432/pki
       REDIS_URL: redis://redis:6379/0
       STEP_CA_URL: https://step-ca:9000
+      STEPPATH: /home/step
       # Set this only after you initialize your CA manually.
       # It must match your step-ca password used for admin operations.
       STEP_CA_PASSWORD: ${STEP_CA_PASSWORD:-}
@@ -52,6 +53,8 @@ services:
         condition: service_started
       step-ca:
         condition: service_started
+    volumes:
+      - stepca_data:/home/step
 
   postgres:
     image: postgres:16
@@ -103,7 +106,18 @@ services:
 
   step-ca:
     image: smallstep/step-ca:latest
-    command: step-ca /home/step/config/ca.json
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        echo "Waiting for CA config at /home/step/config/ca.json..."
+        while [ ! -f /home/step/config/ca.json ]; do sleep 2; done
+        echo "CA config found. Starting step-ca..."
+        if [ -f /home/step/secrets/.ca_password ]; then
+          exec step-ca /home/step/config/ca.json --password-file /home/step/secrets/.ca_password
+        fi
+        exec step-ca /home/step/config/ca.json
     ports:
       - "9000:9000"
     volumes:
