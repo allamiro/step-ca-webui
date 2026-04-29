@@ -1,0 +1,47 @@
+{
+  "realm": "pki",
+  "enabled": true,
+  "sslRequired": "NONE",
+  "roles": {
+    "realm": [
+      { "name": "pki-admin" },
+      { "name": "pki-operator" },
+      { "name": "pki-auditor" },
+      { "name": "pki-user" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "pki-frontend",
+      "publicClient": true,
+      "redirectUris": ["http://localhost:5173/*"],
+      "webOrigins": ["http://localhost:5173"],
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false
+    },
+    {
+      "clientId": "pki-api",
+      "secret": "pki-api-secret",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "admin123", "temporary": false }],
+      "realmRoles": ["pki-admin"]
+    },
+    {
+      "username": "operator",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{ "type": "password", "value": "operator123", "temporary": false }],
+      "realmRoles": ["pki-operator"]
+    }
+  ]
+}

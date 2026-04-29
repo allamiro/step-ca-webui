@@ -1,0 +1,127 @@
+services:
+  frontend:
+    build:
+      context: ../apps/frontend
+    environment:
+      VITE_API_URL: http://localhost:8000/api
+      VITE_KEYCLOAK_URL: http://localhost:8080
+      VITE_KEYCLOAK_REALM: pki
+      VITE_KEYCLOAK_CLIENT_ID: pki-frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      api:
+        condition: service_started
+
+  api:
+    build:
+      context: ../apps/api
+    environment:
+      database_url: postgresql+psycopg2://pki:pki@postgres:5432/pki
+      redis_url: redis://redis:6379/0
+      # Must match the `iss` claim in tokens issued to the browser client.
+      # Frontend uses http://localhost:8080, so issuer must be localhost here.
+      keycloak_issuer: http://localhost:8080/realms/pki
+      keycloak_jwks_url: http://keycloak:8080/realms/pki/protocol/openid-connect/certs
+      keycloak_audience: pki-api
+      step_ca_url: https://step-ca:9000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      keycloak:
+        condition: service_started
+
+  worker:
+    build:
+      context: ../apps/worker
+    environment:
+      DATABASE_URL: postgresql+psycopg2://pki:pki@postgres:5432/pki
+      REDIS_URL: redis://redis:6379/0
+      STEP_CA_URL: https://step-ca:9000
+      # Set this only after you initialize your CA manually.
+      # It must match your step-ca password used for admin operations.
+      STEP_CA_PASSWORD: ${STEP_CA_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      step-ca:
+        condition: service_started
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: pki
+      POSTGRES_USER: pki
+      POSTGRES_PASSWORD: pki
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pki -d pki"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  keycloak:
+    build:
+      context: ./keycloak
+      dockerfile: Dockerfile
+    command: start-dev --import-realm --hostname-strict=false --proxy-headers=xforwarded
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    ports:
+      - "8080:8080"
+
+  keycloak-init:
+    image: quay.io/keycloak/keycloak:26.0
+    depends_on:
+      keycloak:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "set -e;
+      for i in $(seq 1 60); do
+        /opt/keycloak/bin/kcadm.sh config credentials --server http://keycloak:8080 --realm master --user admin --password admin && break;
+        sleep 2;
+      done;
+      /opt/keycloak/bin/kcadm.sh update realms/master -s sslRequired=NONE;
+      /opt/keycloak/bin/kcadm.sh update realms/pki -s sslRequired=NONE;
+      echo 'Keycloak realm SSL requirements updated for local dev.'"
+
+  step-ca:
+    image: smallstep/step-ca:latest
+    command: step-ca /home/step/config/ca.json
+    ports:
+      - "9000:9000"
+    volumes:
+      - stepca_data:/home/step
+
+  # One-time helper for manual CA initialization.
+  # Run this explicitly before starting step-ca:
+  # docker compose run --rm step-ca-init
+  step-ca-init:
+    image: smallstep/step-ca:latest
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "step ca init --name 'My PKI' --dns step-ca,localhost --address :9000 --provisioner admin --acme --remote-management"
+    stdin_open: true
+    tty: true
+    volumes:
+      - stepca_data:/home/step
+
+volumes:
+  postgres_data:
+  stepca_data:
